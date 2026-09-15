@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>四机器人牌桌</title>
+  <style>
+    :root {
+      --felt: #1f6b4a;
+      --felt-dark: #164e36;
+      --wood: #2a1d14;
+      --paper: #f4ecd6;
+      --ink: #1b140c;
+      --gold: #d4b15a;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--wood);
+      color: var(--paper);
+    }
+    .app {
+      display: grid;
+      grid-template-columns: 240px 1fr 280px;
+      height: 100%;
+    }
+    aside, .log-wrap {
+      background: #1a140f;
+      border-right: 1px solid #3c2a18;
+      padding: 16px 14px;
+      overflow: auto;
+    }
+    .log-wrap { border-right: 0; border-left: 1px solid #3c2a18; }
+    h1 { font-size: 18px; margin: 0 0 12px; color: var(--gold); }
+    h2 { font-size: 13px; margin: 18px 0 8px; color: #cbb99a; font-weight: 600; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    button {
+      background: var(--gold);
+      color: #1b140c;
+      border: 0;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.45; cursor: default; }
+    button.ghost { background: transparent; color: var(--paper); border: 1px solid #6a5433; }
+    .status { font-size: 13px; line-height: 1.5; color: #efe4c8; min-height: 40px; }
+    .game-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: #241910;
+      color: var(--paper);
+      border: 1px solid #3c2a18;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+    .game-item.active { border-color: var(--gold); }
+    .game-item small { display: block; color: #cbb99a; font-weight: 400; }
+    .table {
+      background:
+        radial-gradient(circle at 50% 45%, #2d8a5e 0%, var(--felt) 52%, var(--felt-dark) 100%);
+      padding: 12px;
+      display: grid;
+      grid-template-areas:
+        ". north ."
+        "west center east"
+        ". south .";
+      grid-template-columns: 220px minmax(280px, 1fr) 220px;
+      grid-template-rows: auto 1fr auto;
+      gap: 10px;
+    }
+    .seat { background: rgba(0,0,0,.22); border-radius: 10px; padding: 10px; }
+    .seat.s1 { grid-area: south; }
+    .seat.s2 { grid-area: east; }
+    .seat.s3 { grid-area: north; }
+    .seat.s4 { grid-area: west; }
+    .center {
+      grid-area: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 280px;
+    }
+    .who { font-size: 13px; margin-bottom: 6px; }
+    .who b { color: var(--gold); }
+    .seat-body { display: flex; gap: 10px; align-items: flex-end; }
+    .seat.s1 .seat-body, .seat.s3 .seat-body { justify-content: center; }
+    .seat.s2 .seat-body { flex-direction: row-reverse; }
+    .concealed, .opens { min-width: 0; }
+    .concealed { flex: 1; }
+    .seat.s1 .concealed, .seat.s3 .concealed { flex: 0 1 auto; }
+    .opens {
+      flex: 0 0 auto;
+      border-left: 1px dashed rgba(212, 177, 90, 0.55);
+      padding-left: 8px;
+      min-width: 78px;
+    }
+    .seat.s2 .opens {
+      border-left: 0;
+      border-right: 1px dashed rgba(212, 177, 90, 0.55);
+      padding-left: 0;
+      padding-right: 8px;
+    }
+    .lab { font-size: 11px; color: #f0d9a2; margin-bottom: 4px; }
+    .meld { margin-bottom: 6px; }
+    .meld .lab { margin-bottom: 2px; }
+    .meld.peng .tile, .meld.gang .tile {
+      background: linear-gradient(#f7e7b8, #e2c56c);
+    }
+    .meld.gang .tile { box-shadow: 0 0 0 1px #8a6d1a, 0 2px 0 rgba(0,0,0,.18); }
+    .empty-open { color: #9a8870; font-size: 12px; }
+    .tiles { display: flex; flex-wrap: wrap; gap: 4px; }
+    .tile {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 28px;
+      height: 36px;
+      padding: 0 5px;
+      background: linear-gradient(#fffef8, #efe4c4);
+      color: #1b140c;
+      border: 1px solid #c9a85b;
+      border-radius: 4px;
+      font-weight: 700;
+      font-size: 13px;
+      box-shadow: 0 1px 0 #fff inset, 0 2px 0 rgba(0,0,0,.18);
+    }
+    .tile.wan { color: #b42318; }
+    .tile.tiao { color: #157347; }
+    .tile.tong { color: #1d4ed8; }
+    .tile.honor { color: #111; }
+    .tile.laizi {
+      background: linear-gradient(#fff4c2, #e8b33a);
+      color: #7a1488;
+      border-color: #c47a12;
+    }
+    .tile.called { opacity: .42; text-decoration: line-through; }
+    .tile.fresh { outline: 2px solid #fff6d8; transform: translateY(-1px); }
+    .drawn-wrap {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      margin-left: 10px;
+      gap: 2px;
+    }
+    .drawn-wrap .lab { margin: 0; color: #fff6d8; }
+    .action {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff6d8;
+      text-shadow: 0 2px 8px rgba(0,0,0,.4);
+      min-height: 24px;
+      text-align: center;
+    }
+    .pond {
+      width: 100%;
+      max-width: 560px;
+      display: grid;
+      grid-template-columns: 96px 1fr 96px;
+      grid-template-rows: auto auto auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .river { min-height: 44px; }
+    .river .lab { font-size: 11px; color: #f0d9a2; margin-bottom: 4px; text-align: center; }
+    .river-n { grid-column: 2; grid-row: 1; }
+    .river-s { grid-column: 2; grid-row: 3; }
+    .river-w { grid-column: 1; grid-row: 2; }
+    .river-e { grid-column: 3; grid-row: 2; }
+    .pond-mid { grid-column: 2; grid-row: 2; text-align: center; }
+    .river.side .tiles {
+      flex-direction: column;
+      flex-wrap: wrap;
+      max-height: 168px;
+      align-content: center;
+    }
+    .river.n .tiles, .river.s .tiles { justify-content: center; }
+    .stepper { display: flex; gap: 8px; justify-content: center; align-items: center; }
+    .frame-lab { font-size: 12px; color: #f0d9a2; min-width: 64px; }
+    .log { font-size: 13px; line-height: 1.55; }
+    .log button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      color: var(--paper);
+      font-weight: 500;
+      padding: 2px 4px;
+      margin: 0;
+    }
+    .log button.now { color: var(--gold); }
+    .empty { color: #9a8870; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <h1>四机器人牌桌</h1>
+      <div class="row">
+        <button id="startBtn" type="button">开始</button>
+        <button id="skipBtn" class="ghost" type="button">立刻看完</button>
+      </div>
+      <div class="row">
+        <button id="prevBtn" class="ghost" type="button" disabled>上一步</button>
+        <button id="nextBtn" class="ghost" type="button" disabled>下一步</button>
+      </div>
+      <div id="status" class="status">点开始打一局。打完后用上一步 / 下一步从开局看到胡牌。</div>
+      <h2>记录</h2>
+      <div id="history"></div>
+    </aside>
+    <main class="table" id="table">
+      <section class="seat s3" data-seat="3"></section>
+      <section class="seat s4" data-seat="4"></section>
+      <div class="center">
+        <div id="header" class="status"></div>
+        <div class="pond">
+          <div class="river n river-n" data-river="3"><div class="lab">对家河</div><div class="tiles"></div></div>
+          <div class="river side w river-w" data-river="4"><div class="lab">上家河</div><div class="tiles"></div></div>
+          <div class="pond-mid">
+            <div id="action" class="action">等待开局</div>
+            <div class="stepper">
+              <button id="prevBtn2" class="ghost" type="button" disabled>上一步</button>
+              <span id="frameLabel" class="frame-lab">0 / 0</span>
+              <button id="nextBtn2" class="ghost" type="button" disabled>下一步</button>
+            </div>
+          </div>
+          <div class="river side e river-e" data-river="2"><div class="lab">下家河</div><div class="tiles"></div></div>
+          <div class="river s river-s" data-river="1"><div class="lab">本家河</div><div class="tiles"></div></div>
+        </div>
+      </div>
+      <section class="seat s2" data-seat="2"></section>
+      <section class="seat s1" data-seat="1"></section>
+    </main>
+    <section class="log-wrap">
+      <h2>打牌顺序</h2>
+      <div id="log" class="log empty">还没有对局</div>
+    </section>
+  </div>
+  <script>
+    const startBtn = document.getElementById("startBtn");
+    const skipBtn = document.getElementById("skipBtn");
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+    const prevBtn2 = document.getElementById("prevBtn2");
+    const nextBtn2 = document.getElementById("nextBtn2");
+    const statusEl = document.getElementById("status");
+    const headerEl = document.getElementById("header");
+    const actionEl = document.getElementById("action");
+    const frameLabel = document.getElementById("frameLabel");
+    const logEl = document.getElementById("log");
+    const historyEl = document.getElementById("history");
+    let current = null;
+    let timer = 0;
+    let frameAt = 0;
+
+    function tileHtml(tile, fresh) {
+      const called = tile.called ? " called" : "";
+      const hi = (fresh || tile.drawn) ? " fresh" : "";
+      return '<span class="tile ' + tile.kind + called + hi + '">' + tile.name + "</span>";
+    }
+
+    function renderHandTiles(tiles) {
+      return (tiles || []).map(function (t) {
+        if (t.drawn) {
+          return '<span class="drawn-wrap"><span class="lab">刚抓</span>' + tileHtml(t, true) + "</span>";
+        }
+        return tileHtml(t, false);
+      }).join("");
+    }
+
+    function renderOpens(opens) {
+      if (!opens || !opens.length) {
+        return '<div class="opens"><div class="lab">碰杠</div><div class="empty-open">无</div></div>';
+      }
+      return '<div class="opens"><div class="lab">碰杠</div>' + opens.map(function (meld) {
+        return '<div class="meld ' + meld.family + '"><div class="lab">' + meld.kind + "</div>" +
+          '<div class="tiles">' + (meld.tiles || []).map(function (t) { return tileHtml(t, false); }).join("") + "</div></div>";
+      }).join("") + "</div>";
+    }
+
+    function renderSeat(seat) {
+      const el = document.querySelector('.seat[data-seat="' + seat.seat + '"]');
+      const dealer = seat.dealer ? " 庄" : "";
+      const n = (seat.hand || []).length;
+      el.innerHTML =
+        '<div class="who"><b>' + seat.name + "</b>" + dealer + "  " + seat.shanten + "</div>" +
+        '<div class="seat-body">' +
+          '<div class="concealed"><div class="lab">手牌 ' + n + "张</div>" +
+            '<div class="tiles">' + renderHandTiles(seat.hand) + "</div></div>" +
+          renderOpens(seat.opens) +
+        "</div>";
+    }
+
+    function renderRivers(seats, lastSeat) {
+      seats.forEach(function (seat) {
+        const box = document.querySelector('.river[data-river="' + seat.seat + '"]');
+        const lab = box.querySelector(".lab");
+        const tiles = box.querySelector(".tiles");
+        lab.textContent = seat.name + " 打牌";
+        const river = seat.river || [];
+        tiles.innerHTML = river.map(function (t, i) {
+          const fresh = seat.seat === lastSeat && i === river.length - 1 && !t.called;
+          return tileHtml(t, fresh);
+        }).join("");
+      });
+    }
+
+    function showFrame(game, i) {
+      const frame = game.frames[i];
+      if (!frame) return;
+      frame.seats.forEach(renderSeat);
+      renderRivers(frame.seats, frame.last_discard_seat);
+      actionEl.textContent = frame.line;
+      headerEl.textContent = (game.header || "") + (frame.wall != null ? "  牌墙" + frame.wall : "");
+      const lines = game.log || [];
+      logEl.classList.remove("empty");
+      logEl.innerHTML = ['<button type="button" data-frame="0">开局</button>'].concat(lines.map(function (line, idx) {
+        return '<button type="button" data-frame="' + (idx + 1) + '">' + line + "</button>";
+      })).join("");
+      logEl.querySelectorAll("button").forEach(function (btn) {
+        const n = parseInt(btn.dataset.frame, 10);
+        if (n === i) btn.classList.add("now");
+        btn.onclick = function () { goTo(n); };
+      });
+      const now = logEl.querySelector(".now");
+      if (now) now.scrollIntoView({ block: "nearest" });
+      updateStepButtons();
+    }
+
+    function updateStepButtons() {
+      const max = current ? current.frames.length - 1 : 0;
+      const atStart = !current || frameAt <= 0;
+      const atEnd = !current || frameAt >= max;
+      [prevBtn, prevBtn2].forEach(function (b) { b.disabled = atStart; });
+      [nextBtn, nextBtn2].forEach(function (b) { b.disabled = atEnd; });
+      frameLabel.textContent = current ? (frameAt + " / " + max) : "0 / 0";
+    }
+
+    function stopPlay() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = 0;
+      }
+    }
+
+    function goTo(i) {
+      if (!current) return;
+      stopPlay();
+      const max = current.frames.length - 1;
+      frameAt = Math.max(0, Math.min(i, max));
+      showFrame(current, frameAt);
+    }
+
+    function playFrames(game, instant) {
+      stopPlay();
+      current = game;
+      statusEl.textContent = game.result_text + "  共" + (game.n_discard || 0) + "手";
+      if (instant) {
+        goTo(game.frames.length - 1);
+        return;
+      }
+      frameAt = 0;
+      showFrame(game, 0);
+    }
+
+    async function loadHistory(activeId) {
+      const res = await fetch("/api/games");
+      const data = await res.json();
+      const games = data.games || [];
+      if (!games.length) {
+        historyEl.innerHTML = '<div class="empty">还没有记录</div>';
+        return;
+      }
+      historyEl.innerHTML = games.map(function (g) {
+        const on = g.id === activeId ? " active" : "";
+        return '<button class="game-item' + on + '" data-id="' + g.id + '">' +
+          (g.text || g.result || g.id) +
+          "<small>" + (g.created || "") + " · " + (g.n_discard || 0) + "手</small></button>";
+      }).join("");
+      historyEl.querySelectorAll("button").forEach(function (btn) {
+        btn.onclick = async function () {
+          const rec = await fetch("/api/games/" + btn.dataset.id);
+          const game = await rec.json();
+          playFrames(game, false);
+          goTo(0);
+          loadHistory(game.id);
+        };
+      });
+    }
+
+    startBtn.onclick = async function () {
+      stopPlay();
+      startBtn.disabled = true;
+      statusEl.textContent = "四个机器人正在打牌…";
+      try {
+        const res = await fetch("/api/play", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        const game = await res.json();
+        if (!res.ok) throw new Error(game.error || "对局失败");
+        playFrames(game, false);
+        await loadHistory(game.id);
+      } catch (err) {
+        statusEl.textContent = String(err);
+      } finally {
+        startBtn.disabled = false;
+      }
+    };
+
+    skipBtn.onclick = function () {
+      if (current) goTo(current.frames.length - 1);
+    };
+    prevBtn.onclick = prevBtn2.onclick = function () { goTo(frameAt - 1); };
+    nextBtn.onclick = nextBtn2.onclick = function () { goTo(frameAt + 1); };
+    document.addEventListener("keydown", function (ev) {
+      if (!current) return;
+      if (ev.key === "ArrowLeft") goTo(frameAt - 1);
+      if (ev.key === "ArrowRight") goTo(frameAt + 1);
+    });
+
+    loadHistory();
+  </script>
+</body>
+</html>

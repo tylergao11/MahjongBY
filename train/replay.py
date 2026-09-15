@@ -12,15 +12,23 @@ from train.tiles import (
     CALL_PASS,
     CALL_PENG,
     CODE_TO_CALL,
+    LAIZI_IDX,
     N_CALL,
     counts_from_list,
+    discard_legal_vec,
     is_honor,
+    is_laizi,
     next_seat,
     one_hot_tile,
     suit_rank,
     tile_idx,
 )
-from train.wincheck import can_win
+from train.shanten import discard_shanten_vec, locked_shanten, qidui_shanten, shanten
+from harvest.legal import can_chi_high, can_chi_low, can_chi_mid, legal_call_mask
+from train.wincheck import can_ron, can_win
+
+HONORS = (49, 50, 51, 52, 65, 66, 67)
+WINDS = (49, 50, 51, 52)
 
 
 def parse_tiles(text):
@@ -85,55 +93,6 @@ def _count(hand, tile):
     return sum(1 for x in hand if x == tile)
 
 
-def can_chi_high(hand, tile):
-    suit, rank = suit_rank(tile)
-    if suit is None or rank < 3:
-        return False
-    return (tile - 2) in hand and (tile - 1) in hand
-
-
-def can_chi_mid(hand, tile):
-    suit, rank = suit_rank(tile)
-    if suit is None or rank < 2 or rank > 8:
-        return False
-    return (tile - 1) in hand and (tile + 1) in hand
-
-
-def can_chi_low(hand, tile):
-    suit, rank = suit_rank(tile)
-    if suit is None or rank > 7:
-        return False
-    return (tile + 1) in hand and (tile + 2) in hand
-
-
-def legal_call_mask(hand, offer, offer_seat, seat, own_turn=False, n_melds=0):
-    mask = [0] * N_CALL
-    mask[CALL_PASS] = 1
-    if own_turn:
-        if any(hand.count(tid) >= 4 for tid in set(hand)):
-            mask[CALL_AN_GANG] = 1
-        if can_win(hand, n_melds=n_melds):
-            mask[CALL_HU] = 1
-        return mask
-    if offer is None or offer_seat is None or seat == offer_seat:
-        return mask
-    if seat == next_seat(offer_seat):
-        if can_chi_high(hand, offer):
-            mask[CALL_CHI_HIGH] = 1
-        if can_chi_mid(hand, offer):
-            mask[CALL_CHI_MID] = 1
-        if can_chi_low(hand, offer):
-            mask[CALL_CHI_LOW] = 1
-    n = _count(hand, offer)
-    if n >= 2:
-        mask[CALL_PENG] = 1
-    if n >= 3:
-        mask[CALL_MING_GANG] = 1
-    if can_win(hand, extra=offer, n_melds=n_melds):
-        mask[CALL_HU] = 1
-    return mask
-
-
 def _hand_shape(hand):
     counts = Counter(hand)
     isolated = sum(1 for n in counts.values() if n == 1)
@@ -154,7 +113,19 @@ def _hand_shape(hand):
     ]
 
 
-def call_extra_features(hand, offer, offer_seat, seat, mask):
+def seat_wind_tile(seat, dealer):
+    return WINDS[(int(seat) - int(dealer)) % 4]
+
+
+def _visible_tiles(rivers, melds):
+    out = []
+    for s in range(1, 5):
+        out.extend(rivers[s])
+        out.extend(melds[s])
+    return out
+
+
+def call_extra_features(hand, offer, offer_seat, seat, mask, rivers=None, n_melds=0, melds=None):
     """Chi neighbors, offer count, legal bits — so 吃/明杠不再被过和碰淹没。"""
     extra = list(mask)
     extra.append(1.0 if offer_seat is not None and seat == next_seat(offer_seat) else 0.0)
@@ -191,6 +162,7 @@ def call_extra_features(hand, offer, offer_seat, seat, mask):
     extra.extend(neigh)
     extra.extend(chi_flags)
     extra.extend(_chi_cost(hand, offer))
+    extra.extend(_chi_shanten(hand, offer, n_melds, rivers, melds))
     return extra
 
 
@@ -224,9 +196,55 @@ def _chi_cost(hand, offer):
     return out
 
 
-def build_call_features(seat, dealer, hands, rivers, melds, mask, offer=None, offer_seat=None, just_drew=0):
+def _chi_shanten(hand, offer, n_melds, rivers, melds=None):
+    rivers = rivers or {s: [] for s in range(1, 5)}
+    melds = melds or {s: [] for s in range(1, 5)}
+    vis = Counter(_visible_tiles(rivers, melds))
+    before = shanten(hand, n_melds=n_melds)
+    out = [
+        (before + 1) / 9.0,
+        n_melds / 4.0,
+        1.0 if n_melds else 0.0,
+        sum(len(rivers[s]) for s in range(1, 5)) / 80.0,
+    ]
+    if offer is None:
+        out.extend([0.0, 0.0, 0.0])
+    else:
+        rank = suit_rank(offer)[1]
+        out.extend([
+            vis[offer] / 4.0,
+            max(0.0, (4 - _count(hand, offer) - vis[offer]) / 4.0),
+            1.0 if rank in (1, 9) else 0.0,
+        ])
+    best_help = 0.0
+    for kind, ok in (
+        ("high", offer is not None and can_chi_high(hand, offer)),
+        ("mid", offer is not None and can_chi_mid(hand, offer)),
+        ("low", offer is not None and can_chi_low(hand, offer)),
+    ):
+        if not ok:
+            out.extend([0.0, 0.0, 0.0])
+            continue
+        remain = list(hand)
+        need = _chi_needed(offer, kind)
+        for tile in need:
+            if tile in remain:
+                remain.remove(tile)
+        after = shanten(remain, n_melds=n_melds + 1)
+        help_n = max(0.0, (before - after) / 3.0)
+        best_help = max(best_help, help_n)
+        need_left = sum(max(0, 4 - _count(hand, tile) - vis[tile]) for tile in need) / 8.0
+        out.extend([(after + 1) / 9.0, help_n, need_left])
+    out.append(best_help)
+    out.append(1.0 if best_help > 0 else 0.0)
+    return out
+
+
+def build_call_features(seat, dealer, hands, rivers, melds, mask, offer=None, offer_seat=None, just_drew=0, n_melds=0):
     base = build_features(seat, dealer, hands, rivers, melds, offer, offer_seat, just_drew)
-    return base + call_extra_features(hands[seat], offer, offer_seat, seat, mask)
+    return base + call_extra_features(
+        hands[seat], offer, offer_seat, seat, mask, rivers=rivers, n_melds=n_melds, melds=melds,
+    )
 
 
 def build_features(seat, dealer, hands, rivers, melds, offer=None, offer_seat=None, just_drew=0):
@@ -257,19 +275,42 @@ def build_features(seat, dealer, hands, rivers, melds, offer=None, offer_seat=No
     )
 
 
-def _honor_block(hand, rivers):
-    honors = [49, 50, 51, 52, 65, 66, 67]
-    in_hand = [_count(hand, t) / 4.0 for t in honors]
-    seen = [sum(rivers[s].count(t) for s in range(1, 5)) / 4.0 for t in honors]
-    return in_hand + seen
+def _honor_detail(hand, visible, seat, dealer):
+    vis = Counter(visible)
+    hand_c = Counter(hand)
+    wind = seat_wind_tile(seat, dealer)
+    block = []
+    isolated = []
+    for tile in HONORS:
+        n = hand_c[tile]
+        seen = vis[tile]
+        left = max(0, 4 - n - seen)
+        block.extend([
+            n / 4.0,
+            seen / 4.0,
+            left / 4.0,
+            1.0 if n == 1 else 0.0,
+            1.0 if n >= 2 else 0.0,
+            1.0 if tile == wind else 0.0,
+        ])
+        if n == 1:
+            isolated.append((seen, left, tile))
+    safest = [0.0] * 7
+    margin = 0.0
+    if isolated:
+        isolated.sort(key=lambda row: (row[0], -row[1]), reverse=True)
+        safest[HONORS.index(isolated[0][2])] = 1.0
+        if len(isolated) > 1:
+            margin = (isolated[0][0] - isolated[1][0]) / 4.0
+    n_iso = len(isolated) / 7.0
+    n_pairs = sum(1.0 for tile in HONORS if hand_c[tile] >= 2) / 7.0
+    return block + safest + [margin, n_iso, n_pairs]
 
 
-def _compact_features(seat, dealer, hands, rivers, melds, just_drew=0):
-    visible = []
+def _compact_features(seat, dealer, hands, rivers, melds, just_drew=0, n_melds=0):
+    visible = _visible_tiles(rivers, melds)
     others_meld = []
     for s in range(1, 5):
-        visible.extend(rivers[s])
-        visible.extend(melds[s])
         if s != seat:
             others_meld.extend(melds[s])
     seat_oh = [0, 0, 0, 0]
@@ -277,7 +318,13 @@ def _compact_features(seat, dealer, hands, rivers, melds, just_drew=0):
     hand_c = counts_from_list(hands[seat])
     vis_c = counts_from_list(visible)
     isolated = [1.0 if n == 1 else 0.0 for n in hand_c]
+    isolated[LAIZI_IDX] = 0.0
     remain = [max(0.0, (4 - h - v) / 4.0) for h, v in zip(hand_c, vis_c)]
+    laizi_n = sum(1 for t in hands[seat] if is_laizi(t))
+    locked = locked_shanten(hands[seat], n_melds=n_melds)
+    best = shanten(hands[seat], n_melds=n_melds)
+    help_n = max(0.0, (locked - best) / 6.0) if laizi_n else 0.0
+    qidui = qidui_shanten(hands[seat]) if n_melds == 0 else 8
     return (
         hand_c
         + counts_from_list(melds[seat])
@@ -287,13 +334,17 @@ def _compact_features(seat, dealer, hands, rivers, melds, just_drew=0):
         + [1 if seat == dealer else 0]
         + [len(hands[seat]) / 14.0]
         + [1 if just_drew else 0]
-        + _honor_block(hands[seat], rivers)
+        + _honor_detail(hands[seat], visible, seat, dealer)
         + _hand_shape(hands[seat])
         + isolated
         + remain
+        + discard_shanten_vec(hands[seat], n_melds=n_melds)
+        + [(best + 1) / 9.0]
+        + [n_melds / 4.0]
         + [sum(len(rivers[s]) for s in range(1, 5)) / 80.0]
         + [len(melds[seat]) / 16.0]
         + one_hot_tile(rivers[seat][-1] if rivers[seat] else None)
+        + [laizi_n / 4.0, 1.0 if laizi_n else 0.0, help_n, (qidui + 1) / 8.0]
     )
 
 
@@ -333,7 +384,10 @@ def _emit_response_calls(game, dealer, hands, rivers, melds, n_melds, offer, off
             "call",
             label,
             mask,
-            build_call_features(seat, dealer, hands, rivers, melds, mask, offer, offer_seat),
+            build_call_features(
+                seat, dealer, hands, rivers, melds, mask, offer, offer_seat,
+                n_melds=n_melds[seat],
+            ),
         ))
     return rows
 
@@ -382,6 +436,7 @@ def extract_samples(game):
             game, seat, "call", action, mask,
             build_call_features(
                 seat, dealer, hands, rivers, melds, mask, just_drew=last_drew[seat],
+                n_melds=n_melds[seat],
             ),
         ))
 
@@ -401,7 +456,7 @@ def extract_samples(game):
             discard = tiles[0]
             label = tile_idx(discard)
             if label is not None and discard in hands[seat]:
-                mask = [1 if c > 0 else 0 for c in counts_from_list(hands[seat])]
+                mask = discard_legal_vec(hands[seat])
                 discards.append(_meta(
                     game, seat, "discard", label, mask,
                     build_features(
@@ -411,7 +466,9 @@ def extract_samples(game):
                     extra={
                         "discard": discard,
                         "x_compact": _compact_features(
-                            seat, dealer, hands, rivers, melds, just_drew=last_drew[seat],
+                            seat, dealer, hands, rivers, melds,
+                            just_drew=last_drew[seat],
+                            n_melds=n_melds[seat],
                         ),
                     },
                 ))
