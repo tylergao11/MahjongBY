@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Four harvest robots play one official kechichang game."""
+"""Four giveaway robots play one official kechichang game."""
 import json
 import random
 import time
 from collections import Counter
 from pathlib import Path
 
-from harvest import HarvestBots
+from giveaway import GiveawayBots
 from harvest.legal import legal_call_mask
 from train.replay import (
     _chi_needed,
@@ -53,13 +53,13 @@ _BOTS = None
 def load_bots():
     global _BOTS
     if _BOTS is None:
-        _BOTS = HarvestBots()
+        _BOTS = GiveawayBots()
     return _BOTS
 
 
 def __getattr__(name):
     if name == "Bots":
-        return HarvestBots
+        return GiveawayBots
     raise AttributeError(name)
 
 
