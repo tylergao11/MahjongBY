@@ -87,8 +87,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             body = {}
         seed = body.get("seed") if isinstance(body, dict) else None
+        table = body.get("table") if isinstance(body, dict) else None
         try:
-            game = play_game(seed=seed)
+            game = play_game(seed=seed, table=table or "mix")
             save_game(game)
             self._json(200, pack_game(game))
         except Exception as exc:

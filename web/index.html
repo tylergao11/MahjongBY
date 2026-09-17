@@ -202,6 +202,14 @@
     <aside>
       <h1>四机器人牌桌</h1>
       <div class="row">
+        <select id="tableKind" style="background:#241910;color:#f4ecd6;border:1px solid #6a5433;border-radius:6px;padding:8px 10px;">
+          <option value="mix">混桌：收割 / 陪玩 / 送钱 / 线上</option>
+          <option value="harvest">四个收割</option>
+          <option value="companion">四个陪玩</option>
+          <option value="giveaway">四个送钱</option>
+        </select>
+      </div>
+      <div class="row">
         <button id="startBtn" type="button">开始</button>
         <button id="skipBtn" class="ghost" type="button">立刻看完</button>
       </div>
@@ -209,7 +217,7 @@
         <button id="prevBtn" class="ghost" type="button" disabled>上一步</button>
         <button id="nextBtn" class="ghost" type="button" disabled>下一步</button>
       </div>
-      <div id="status" class="status">点开始打一局。打完后用上一步 / 下一步从开局看到胡牌。</div>
+      <div id="status" class="status">选桌型后点开始。混桌四家各打一套，方便看出牌差在哪。</div>
       <h2>记录</h2>
       <div id="history"></div>
     </aside>
@@ -242,6 +250,7 @@
     </section>
   </div>
   <script>
+    const tableKind = document.getElementById("tableKind");
     const startBtn = document.getElementById("startBtn");
     const skipBtn = document.getElementById("skipBtn");
     const prevBtn = document.getElementById("prevBtn");
@@ -398,7 +407,11 @@
       startBtn.disabled = true;
       statusEl.textContent = "四个机器人正在打牌…";
       try {
-        const res = await fetch("/api/play", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        const res = await fetch("/api/play", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ table: tableKind.value }),
+        });
         const game = await res.json();
         if (!res.ok) throw new Error(game.error || "对局失败");
         playFrames(game, false);

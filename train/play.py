@@ -6,8 +6,11 @@ import time
 from collections import Counter
 from pathlib import Path
 
+from companion import CompanionBots
 from giveaway import GiveawayBots
+from harvest import HarvestBots
 from harvest.legal import legal_call_mask
+from train.online_bot import OnlineBots
 from train.replay import (
     _chi_needed,
     _take,
@@ -63,6 +66,36 @@ def __getattr__(name):
     raise AttributeError(name)
 
 
+class MixSeats:
+    def __init__(self):
+        self.bots = {
+            1: HarvestBots(),
+            2: CompanionBots(),
+            3: GiveawayBots(),
+            4: OnlineBots(),
+        }
+
+    def pick_discard(self, *args, **kwargs):
+        return self.bots[args[0]].pick_discard(*args, **kwargs)
+
+    def pick_call(self, *args, **kwargs):
+        return self.bots[args[0]].pick_call(*args, **kwargs)
+
+    def want_bu_gang(self, hand, melds, kinds, wall_n=80, seat=None, **kwargs):
+        return self.bots[seat].want_bu_gang(hand, melds, kinds, wall_n=wall_n, seat=seat, **kwargs)
+
+
+def make_table(kind):
+    kind = (kind or "mix").strip().lower()
+    if kind == "harvest":
+        return HarvestBots(), {1: "收割1", 2: "收割2", 3: "收割3", 4: "收割4"}
+    if kind == "companion":
+        return CompanionBots(), {1: "陪玩1", 2: "陪玩2", 3: "陪玩3", 4: "陪玩4"}
+    if kind == "giveaway":
+        return GiveawayBots(), {1: "送钱1", 2: "送钱2", 3: "送钱3", 4: "送钱4"}
+    return MixSeats(), {1: "收割", 2: "陪玩", 3: "送钱", 4: "线上"}
+
+
 def _safe_discard(hand, tile):
     if tile in hand:
         return tile
@@ -116,10 +149,14 @@ def _mark_called(rivers, river_called, seat, tile):
             break
 
 
-def play_game(seed=None, bots=None):
+def play_game(seed=None, bots=None, names=None, table=None):
     rng = random.Random(seed)
     if bots is None:
-        bots = load_bots()
+        if table:
+            bots, names = make_table(table)
+        else:
+            bots = load_bots()
+    names = names or BOT_NAMES
     wall = []
     for tid in TILE_IDS:
         wall.extend([tid] * 4)
@@ -145,7 +182,7 @@ def play_game(seed=None, bots=None):
         "op": "deal",
         "dealer": dealer,
         "hands": {seat: list(hands[seat]) for seat in SEATS},
-        "names": dict(BOT_NAMES),
+        "names": dict(names),
         "gamb_id": gid,
         "room_level": "bot",
         "wall_left": len(wall),
@@ -181,7 +218,7 @@ def play_game(seed=None, bots=None):
     def do_discard(seat, just_drew, forbid=None):
         tile = bots.pick_discard(
             seat, dealer, hands, rivers, melds, n_melds, just_drew, forbid=forbid,
-            meld_kinds=meld_kinds[seat], wall_n=len(wall),
+            meld_kinds=meld_kinds, wall_n=len(wall),
         )
         tile = _force_legal_discard(hands[seat], tile, forbid=forbid)
         hands[seat].remove(tile)
@@ -305,6 +342,8 @@ def play_game(seed=None, bots=None):
         if hasattr(bots, "want_bu_gang"):
             bu = bots.want_bu_gang(
                 hands[seat], melds[seat], meld_kinds[seat], wall_n=len(wall), seat=seat,
+                hands=hands, rivers=rivers, n_melds=n_melds, meld_kinds=meld_kinds,
+                all_melds=melds,
             )
         if bu is not None and wall:
             hands[seat].remove(bu)
@@ -426,11 +465,19 @@ def _finish(gid, events, ended, seed):
     }
 
 
+def _seat_names(game):
+    events = game.get("events") or []
+    if events and isinstance(events[0], dict) and events[0].get("names"):
+        return events[0]["names"]
+    return BOT_NAMES
+
+
 def result_text(game):
     winners = game.get("winners") or []
     if not winners and game.get("winner"):
         winners = [game.get("winner")]
-    names = "、".join(BOT_NAMES.get(s, "") for s in winners)
+    label = _seat_names(game)
+    names = "、".join(label.get(s, "") for s in winners)
     tile = tile_name(game.get("hu_tile")) if game.get("hu_tile") else ""
     fans = game.get("fans") or {}
     fan_txt = ""
@@ -445,7 +492,7 @@ def result_text(game):
         prefix = "自摸" if game.get("result") == "自摸" else game.get("result")
         return "%s %s %s%s" % (names, prefix, tile, fan_txt)
     if game.get("result") in ("点炮", "抢杠") and winners:
-        src = BOT_NAMES.get(game.get("from_seat"), "")
+        src = label.get(game.get("from_seat"), "")
         verb = "抢杠" if game.get("result") == "抢杠" else "点炮"
         return "%s 胡 %s（%s%s）%s" % (names, tile, src, verb, fan_txt)
     if game.get("result") == "流局":

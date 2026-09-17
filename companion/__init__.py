@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""曲靖飞小鸡可吃场送钱。看不上小胡，大胡才要。规则共用 harvest/。"""
-from giveaway.bot import GiveawayBots, pick_call, pick_discard
+"""曲靖飞小鸡可吃场陪玩。策略只在这个目录，规则共用 harvest/。"""
+from companion.bot import CompanionBots
 from harvest.legal import legal_call_mask
 from harvest.tiles import (
     CALL_AN_GANG,
